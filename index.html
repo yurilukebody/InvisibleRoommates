@@ -1,0 +1,1413 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>InvisibleRoommates</title>
+<style>
+  :root {
+    --bg0: #23252f;
+    --bg1: #0f1015;
+    --ink: #ece6d9;
+    --ink-dim: #9d978b;
+    --pill: rgba(28, 30, 38, 0.72);
+    --line: rgba(255, 255, 255, 0.09);
+    --btn: rgba(255, 255, 255, 0.08);
+    --btn-hover: rgba(255, 255, 255, 0.15);
+    --ease-spring: cubic-bezier(0.34, 1.56, 0.64, 1);
+    --ease-out: cubic-bezier(0.22, 1, 0.36, 1);
+  }
+  html, body {
+    margin: 0;
+    height: 100%;
+    overflow: hidden;
+    background: radial-gradient(120% 90% at 50% 42%, var(--bg0), var(--bg1));
+    color: var(--ink);
+    font-family: "Hiragino Sans", "Yu Gothic UI", "Meiryo", system-ui, sans-serif;
+    -webkit-font-smoothing: antialiased;
+  }
+  canvas { display: block; }
+  .title {
+    position: fixed;
+    left: 20px;
+    top: 18px;
+    pointer-events: none;
+    animation: fadeIn 1.8s var(--ease-out) both;
+  }
+  .title h1 { margin: 0; font-size: 15px; font-weight: 600; letter-spacing: 0.06em; }
+  .title p { margin: 4px 0 0; font-size: 12px; color: var(--ink-dim); letter-spacing: 0.04em; }
+  .title .sound-hint { margin-top: 10px; font-size: 11px; opacity: 0.6; transition: opacity 1.2s var(--ease-out); }
+  .title .sound-hint.off { opacity: 0; }
+  .ui {
+    position: fixed;
+    left: 50%;
+    bottom: max(22px, env(safe-area-inset-bottom));
+    transform: translateX(-50%);
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 8px 8px 8px 18px;
+    border-radius: 999px;
+    background: var(--pill);
+    border: 1px solid var(--line);
+    backdrop-filter: blur(10px);
+    -webkit-backdrop-filter: blur(10px);
+    white-space: nowrap;
+    animation: fadeIn 1.8s 0.4s var(--ease-out) both;
+  }
+  .ui .label { font-size: 13px; color: var(--ink-dim); letter-spacing: 0.04em; }
+  .ui .status { font-size: 11px; color: var(--ink-dim); min-width: 0; }
+  .counter { display: flex; align-items: center; gap: 6px; }
+  .counter button {
+    width: 36px;
+    height: 36px;
+    border-radius: 50%;
+    border: 0;
+    background: var(--btn);
+    color: var(--ink);
+    font-size: 19px;
+    line-height: 1;
+    cursor: pointer;
+    transition: transform 0.4s var(--ease-spring), background 0.2s, opacity 0.2s;
+    -webkit-tap-highlight-color: transparent;
+  }
+  .counter button:hover { background: var(--btn-hover); }
+  .counter button:active { transform: scale(0.86); transition-duration: 0.08s; }
+  .counter button:disabled { opacity: 0.3; cursor: default; }
+  .count {
+    display: inline-block;
+    min-width: 1.6em;
+    text-align: center;
+    font-size: 20px;
+    font-variant-numeric: tabular-nums;
+  }
+  .count.bump { animation: bump 0.45s var(--ease-spring); }
+  @keyframes bump { 0% { transform: translateY(6px); opacity: 0.2; } 100% { transform: none; opacity: 1; } }
+  @keyframes fadeIn { from { opacity: 0; filter: blur(6px); } to { opacity: 1; filter: none; } }
+  @media (max-width: 480px) {
+    .title { left: 16px; top: 14px; }
+    .ui { gap: 8px; padding-left: 14px; }
+    .ui .status { display: none; }
+  }
+</style>
+<script type="importmap">
+{
+  "imports": {
+    "three": "https://cdn.jsdelivr.net/npm/three@0.170.0/build/three.module.js",
+    "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.170.0/examples/jsm/"
+  }
+}
+</script>
+</head>
+<body>
+<div class="title">
+  <h1>InvisibleRoommates</h1>
+  <p>だれもいない部屋。でも、だれかが住んでいる。</p>
+  <p class="sound-hint" id="soundHint">クリックで音が出ます</p>
+</div>
+<div class="ui">
+  <span class="label">見えない同居人</span>
+  <div class="counter">
+    <button id="minus" aria-label="同居人を減らす">−</button>
+    <span class="count" id="count">1</span>
+    <button id="plus" aria-label="同居人を増やす">＋</button>
+  </div>
+  <span class="status" id="status"></span>
+</div>
+
+<script type="module">
+import * as THREE from 'three';
+import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
+
+// ---------- 共通 ----------
+const rand = (a, b) => a + Math.random() * (b - a);
+const chance = (p) => Math.random() < p;
+const pick = (arr) => arr[Math.floor(Math.random() * arr.length)];
+const MAX_ROOMMATES = 6;
+
+// ---------- 描画の準備 ----------
+const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+renderer.setSize(window.innerWidth, window.innerHeight);
+renderer.shadowMap.enabled = true;
+renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+renderer.toneMapping = THREE.ACESFilmicToneMapping;
+renderer.toneMappingExposure = 1.05;
+document.body.prepend(renderer.domElement);
+
+const scene = new THREE.Scene();
+const camera = new THREE.PerspectiveCamera(28, 1, 0.1, 100);
+const lookTarget = new THREE.Vector3(0, 0.75, 0);
+
+// 金属や水回りに映り込みが出るように、ごく弱い環境光を足す（夜なので補助程度）
+const pmrem = new THREE.PMREMGenerator(renderer);
+scene.environment = pmrem.fromScene(new RoomEnvironment(), 0.04).texture;
+scene.environmentIntensity = 0.12;
+
+// ---------- 部屋のモデル（Blender で作った assets/room.glb） ----------
+const gltf = await new GLTFLoader().loadAsync('assets/room.glb');
+const room = gltf.scene;
+scene.add(room);
+const node = (name) => {
+  const o = room.getObjectByName(name);
+  if (!o) throw new Error('room.glb に ' + name + ' がありません');
+  return o;
+};
+const materials = {};
+const maxAniso = renderer.capabilities.getMaxAnisotropy();
+// 金属だけは映り込みを強めにする（環境光が弱いと黒く沈むため）
+const METALS = ['Stainless', 'Chrome', 'Brass', 'Kettle', 'LaptopBody', 'WindowFrame', 'Burner', 'LampMetal', 'DoorSteel'];
+room.traverse((o) => {
+  if (!o.isMesh) return;
+  o.castShadow = true;
+  o.receiveShadow = true;
+  const m = o.material;
+  materials[m.name] = m;
+  for (const k of ['map', 'normalMap', 'roughnessMap', 'aoMap']) if (m[k]) m[k].anisotropy = Math.min(8, maxAniso);
+  if (METALS.includes(m.name)) {
+    m.envMap = scene.environment;
+    m.envMapIntensity = 0.6;
+  }
+});
+// 光る面は名前で探して、自前のマテリアルに差し替える
+function swapMaterial(name, material) {
+  room.traverse((o) => { if (o.isMesh && o.material.name === name) o.material = material; });
+  return material;
+}
+for (const name of ['Rug', 'Room']) node(name).traverse((o) => { o.castShadow = false; });
+node('Window').traverse((o) => { o.castShadow = false; });
+
+// ---------- 光 ----------
+const hemi = new THREE.HemisphereLight('#b9c3e0', '#3a3230', 0.75);
+scene.add(hemi);
+const key = new THREE.DirectionalLight('#fff1e0', 0.55);
+key.position.set(6, 10, 7);
+key.target.position.set(0, 0, 0);
+key.castShadow = true;
+key.shadow.mapSize.set(4096, 4096);
+key.shadow.camera.left = -6.5;
+key.shadow.camera.right = 6.5;
+key.shadow.camera.top = 6.5;
+key.shadow.camera.bottom = -6.5;
+key.shadow.camera.near = 4;
+key.shadow.camera.far = 24;
+key.shadow.bias = -0.0003;
+key.shadow.normalBias = 0.015;
+key.shadow.radius = 3;
+scene.add(key, key.target);
+
+const roomLight = new THREE.PointLight('#ffdcae', 0, 0, 1.6);
+roomLight.position.set(0.2, 2.7, -0.2);
+roomLight.castShadow = true;
+roomLight.shadow.mapSize.set(1024, 1024);
+// 点光源の影の深さは near〜far で割った値なので、far を部屋の大きさに合わせて精度を上げる
+// （既定の far=500 のままだと、狭い面ほど細かい縞・網目の影が出ていた）
+roomLight.shadow.camera.near = 0.1;
+roomLight.shadow.camera.far = 9;
+roomLight.shadow.bias = -0.0008;
+roomLight.shadow.normalBias = 0.035;
+roomLight.shadow.radius = 4;
+scene.add(roomLight);
+
+// ---------- 玄関 ----------
+// 外廊下そのものは描かない（箱の外にはみ出すため）。開いたドアから差し込む光だけで見せる
+const hallSpill = new THREE.SpotLight('#d6e2ff', 0, 7, 0.9, 0.6, 1.4);
+hallSpill.position.set(-4.3, 1.9, 2.15);
+hallSpill.target.position.set(-2.5, 0, 2.0);
+scene.add(hallSpill, hallSpill.target);
+const entranceDoor = node('EntranceDoor');
+const switchToggle = node('SwitchToggle');
+
+// ---------- 浴室 ----------
+const bathWallMat = materials.BathWall;
+bathWallMat.emissive.set('#fff4e0');
+bathWallMat.emissiveMap = bathWallMat.map;
+bathWallMat.emissiveIntensity = 0;
+bathWallMat.needsUpdate = true;
+const bathSpill = new THREE.SpotLight('#fff0d6', 0, 6, 0.85, 0.6, 1.4);
+bathSpill.position.set(-3.15, 1.9, -3.05);
+bathSpill.target.position.set(-3.0, 0, -1.2);
+scene.add(bathSpill, bathSpill.target);
+// ドアの下から漏れる光
+const leakMat = new THREE.MeshBasicMaterial({ color: '#ffd9a0', transparent: true, opacity: 0, blending: THREE.AdditiveBlending, depthWrite: false });
+const leak = new THREE.Mesh(new THREE.PlaneGeometry(0.86, 0.22), leakMat);
+leak.position.set(-3.15, 0.004, -2.9);
+leak.rotation.x = -Math.PI / 2;
+scene.add(leak);
+const bathDoor = node('BathDoor');
+const bathLever = node('BathLever');
+
+// ---------- キッチン ----------
+const waterMat = new THREE.MeshStandardMaterial({ color: '#cfeaff', transparent: true, opacity: 0.75, emissive: '#9fcfff', emissiveIntensity: 0.4, roughness: 0.1 });
+const water = new THREE.Mesh(new THREE.CylinderGeometry(0.009, 0.012, 0.21, 8), waterMat);
+water.position.set(-1.5, 1.025, -2.735);
+water.visible = false;
+scene.add(water);
+
+// コンロの炎
+function makeBurner(x, z) {
+  const flame = new THREE.Group();
+  flame.position.set(x, 0.965, z);
+  scene.add(flame);
+  const flameMat = new THREE.MeshBasicMaterial({ color: '#7fc0ff', transparent: true, opacity: 0.9, blending: THREE.AdditiveBlending, depthWrite: false });
+  const cones = [];
+  for (let i = 0; i < 12; i++) {
+    const a = (i / 12) * Math.PI * 2;
+    const c = new THREE.Mesh(new THREE.ConeGeometry(0.012, 0.05, 6), flameMat);
+    c.position.set(Math.cos(a) * 0.075, 0.025, Math.sin(a) * 0.075);
+    flame.add(c);
+    cones.push(c);
+  }
+  flame.scale.setScalar(0.0001);
+  const light = new THREE.PointLight('#8fb8ff', 0, 2.5, 2);
+  light.position.set(x, 1.05, z + 0.1);
+  scene.add(light);
+  return { flame, cones, light };
+}
+const burnerA = makeBurner(-0.4, -2.67);
+const burnerB = makeBurner(0.1, -2.67);
+const kettleLid = node('KettleLid');
+const kettleLidY = kettleLid.position.y;
+
+// ---------- 冷蔵庫 ----------
+const fridgeInnerMat = materials.FridgeInner;
+fridgeInnerMat.emissive.set('#fffaf0');
+fridgeInnerMat.emissiveIntensity = 0;
+const fridgeLight = new THREE.PointLight('#fff6e6', 0, 3.5, 1.6);
+fridgeLight.position.set(1.35, 1.0, -2.0);
+scene.add(fridgeLight);
+const fridgeDoor = node('FridgeDoor');
+// 庫内（内壁・棚・食べ物）は部屋の影を受けない。狭い箱の中に細かい縞の影が出て、灰色に沈むため
+// 庫内は扉を開けたときの庫内灯（emissive と fridgeLight）で明るく見せる
+const fridgeInside = [];
+for (const n of ['Fridge', 'FridgeDoor']) {
+  node(n).traverse((o) => {
+    if (!o.isMesh || ['FridgeBody', 'BlackPlastic', 'MagnetRed', 'MagnetBlue'].includes(o.material.name)) return;
+    o.receiveShadow = false;
+    o.castShadow = false;
+    fridgeInside.push(o);
+  });
+}
+// 食べ物も庫内灯で少し照らされて見えるように、庫内用に複製したマテリアルへ emissive を足す
+const fridgeFoodMats = [];
+// 内張り（FridgeInner）は本体の内側の面とぴったり重なっていて、ちらちらした網目（Z ファイティング）になるので手前に寄せる
+fridgeInnerMat.polygonOffset = true;
+fridgeInnerMat.polygonOffsetFactor = -1;
+fridgeInnerMat.polygonOffsetUnits = -2;
+// 扉ポケットの物とパッキンは扉の表面と同じ面まで出ていて、表に四角い線が透けるので奥へ下げる（光らせもしない）
+for (const o of fridgeInside) {
+  if (o.material === fridgeInnerMat || !o.name.startsWith('FridgeDoor')) continue;
+  o.material = o.material.clone();
+  o.material.polygonOffset = true;
+  o.material.polygonOffsetFactor = 1;
+  o.material.polygonOffsetUnits = 2;
+}
+for (const o of fridgeInside) {
+  if (o.material === fridgeInnerMat || o.name.startsWith('FridgeDoor')) continue;
+  const m = o.material.clone();
+  m.emissive.copy(m.color);
+  m.emissiveIntensity = 0;
+  o.material = m;
+  fridgeFoodMats.push(m);
+}
+
+// ---------- ベッドと窓 ----------
+const blanket = node('Blanket');
+const blanketBase = blanket.position.clone();
+const blanketFold = node('BlanketFold');
+blanketFold.visible = false;
+const nightMat = materials.NightSky;
+nightMat.emissive.set('#22335c');
+nightMat.emissiveIntensity = 0.9;
+swapMaterial('Moon', new THREE.MeshBasicMaterial({ color: '#f5ecc8' }));
+const curtainL = node('CurtainL');
+const curtainR = node('CurtainR');
+
+// ---------- 机・椅子・ノートPC・スタンド ----------
+const chair = node('Chair');
+const chairBase = chair.position.clone();
+const laptopLid = node('LaptopLid');
+const screenMat = swapMaterial('LaptopScreen', new THREE.MeshBasicMaterial({ color: '#000000' }));
+const laptopLight = new THREE.PointLight('#cfe0ff', 0, 1.6, 2);
+laptopLight.position.set(3.3, 1.0, 1.43);
+scene.add(laptopLight);
+const bulbMat = swapMaterial('LampBulb', new THREE.MeshBasicMaterial({ color: '#4a4740' }));
+const lampLight = new THREE.PointLight('#ffd49a', 0, 3, 1.8);
+lampLight.position.set(3.55, 1.08, 0.95);
+scene.add(lampLight);
+
+// ---------- テレビ・ローテーブル・座布団 ----------
+const tvScreenMat = swapMaterial('TVScreen', new THREE.MeshBasicMaterial({ color: '#08080a' }));
+const tvLight = new THREE.PointLight('#88aaff', 0, 4.5, 1.6);
+tvLight.position.set(-3.3, 0.85, -0.4);
+scene.add(tvLight);
+const remote = node('Remote');
+const remoteBase = remote.position.clone();
+const cushionDefs = [0, 1, 2].map((i) => {
+  const mesh = node('Cushion' + i);
+  return { x: mesh.position.x, z: mesh.position.z, y: mesh.position.y, mesh };
+});
+const cushionMeshes = cushionDefs.map((c) => c.mesh);
+
+// ---------- 状態（目標値に向かってなめらかに動く値） ----------
+const sim = { t: 0, timers: [] };
+function wait(s) {
+  return new Promise((resolve) => sim.timers.push({ at: sim.t + s, resolve }));
+}
+const vals = [];
+class Val {
+  constructor(v, k) { this.v = v; this.t = v; this.k = k; }
+  set(t, k) { this.t = t; if (k) this.k = k; }
+  step(dt) { this.v += (this.t - this.v) * (1 - Math.exp(-this.k * dt)); }
+}
+const val = (v = 0, k = 5) => { const x = new Val(v, k); vals.push(x); return x; };
+
+// 手で動かす物は、速度を持ったバネで動かす（勢いで行きすぎて揺り戻す・止め具に当たって跳ねる）
+// w: 固さ（大きいほど速い） z: 減衰（1 未満だと行きすぎる） wBack/zBack: 値を下げる向き（閉める向き）のときの固さ・減衰
+// min/max: 止め具（扉の枠・ドアストッパー）。当たると rest の割合で跳ね返る
+// suck: 閉まる直前に吸い付く強さ（冷蔵庫のパッキン）
+// push: 閉めるときに枠より少し奥へ押し込む量（そのぶん勢いが残って枠に当たり、トンと跳ねる）
+class Spring {
+  constructor(v, o) {
+    this.v = v; this.t = v; this.vel = 0;
+    this.w = o.w; this.z = o.z; this.wBack = o.wBack ?? o.w; this.zBack = o.zBack ?? o.z;
+    this.min = o.min ?? -Infinity; this.max = o.max ?? Infinity; this.rest = o.rest ?? 0.25; this.suck = o.suck ?? 0; this.push = o.push ?? 0;
+  }
+  set(t) { this.t = t; }
+  step(dt) {
+    const n = Math.max(1, Math.ceil(dt / 0.006));
+    const h = dt / n;
+    for (let i = 0; i < n; i++) {
+      const back = this.t < this.v;
+      const w = back ? this.wBack : this.w, z = back ? this.zBack : this.z;
+      const goal = this.t <= this.min + 0.001 ? this.t - this.push : this.t;
+      let a = w * w * (goal - this.v) - 2 * z * w * this.vel;
+      if (this.suck && this.t <= this.min + 0.001 && this.v < this.min + 0.1) a -= this.suck * (1 - (this.v - this.min) / 0.1);
+      this.vel += a * h;
+      this.v += this.vel * h;
+      if (this.v < this.min) { this.v = this.min; if (this.vel < 0) this.vel = -this.vel * this.rest; if (this.vel < 0.05) this.vel = 0; }
+      if (this.v > this.max) { this.v = this.max; if (this.vel > 0) this.vel = -this.vel * this.rest; if (this.vel > -0.05) this.vel = 0; }
+    }
+  }
+}
+const spring = (v, o) => { const x = new Spring(v, o); vals.push(x); return x; };
+
+const S = {
+  // 玄関ドアは重く、ドアクローザーでゆっくり戻って最後にトンと当たる
+  entrance: spring(0, { w: 3.4, z: 0.5, wBack: 2.7, zBack: 0.72, min: 0, max: 1.04, rest: 0.3, push: 0.08 }),
+  // 浴室のドアは軽く、勢いよく開いて閉めると枠で小さく跳ねる
+  bathDoor: spring(0, { w: 4.8, z: 0.42, wBack: 4.4, zBack: 0.55, min: 0, max: 1.05, rest: 0.3, push: 0.06 }),
+  bathLight: val(0, 14),
+  bathKnobUntil: 0,
+  roomLight: val(0, 14),
+  roomFlickUntil: 0,
+  switchOn: false,
+  movieBy: null,
+  burnerA: val(0, 7),
+  burnerB: val(0, 7),
+  kettleBoil: false,
+  water: false,
+  // 冷蔵庫の扉は閉まる直前にパッキンで吸い付き、ほとんど跳ねない
+  fridge: spring(0, { w: 3.8, z: 0.5, wBack: 3.5, zBack: 0.68, min: 0, max: 1.04, rest: 0.03, suck: 20 }),
+  tvOn: val(0, 12),
+  tvHue: 0.6,
+  tvFlash: 0,
+  tvCutAt: 0,
+  tvLum: 0.5,
+  lamp: val(0, 12),
+  // ノートPCのふたは開けると少し行きすぎて戻り、閉めるとパタンと小さく跳ねる
+  laptopLid: spring(0, { w: 6, z: 0.5, min: 0, max: 1.06, rest: 0.16, push: 0.04 }),
+  laptopScreen: val(0, 5),
+  // 椅子はガタッと速く動いて、床との引っかかりで少し戻る
+  chairOff: spring(0, { w: 9, z: 0.42 }),
+  chairRot: spring(0, { w: 7, z: 0.5 }),
+  // 布団はふわっと遅れて落ち着く
+  blanket: spring(0, { w: 3.2, z: 0.7 }),
+  // カーテンは引っ張られて行きすぎ、揺れながら止まる
+  curtain: spring(0, { w: 3.6, z: 0.36, min: -0.03, max: 1.06, rest: 0.4 }),
+  cushions: cushionDefs.map(() => ({ dx: spring(0, { w: 8, z: 0.7 }), dz: spring(0, { w: 8, z: 0.7 }), r: spring(0, { w: 7, z: 0.65 }) })),
+  remote: { dx: spring(0, { w: 11, z: 0.62 }), dz: spring(0, { w: 11, z: 0.62 }), r: spring(0, { w: 10, z: 0.6 }) },
+  tvForgot: false,
+  bathForgot: false,
+  lampForgot: false,
+};
+for (const c of S.cushions) c.r.set(rand(-0.15, 0.15)), (c.r.v = c.r.t);
+// 見た目だけの動き（状態 S ではない）: 右のカーテンは左に引っ張られて遅れて動く／スイッチはパチッと倒れて小さく跳ねる
+const curtainLag = spring(0, { w: 2.6, z: 0.3, min: -0.03, max: 1.08, rest: 0.4 });
+const switchAng = spring(-1, { w: 45, z: 0.35, min: -1, max: 1, rest: 0.3 });
+
+// ---------- 鍵（同時に使えるのは一人だけ） ----------
+const locks = {};
+const tryLock = (name, a) => {
+  if (locks[name] && locks[name] !== a) return false;
+  locks[name] = a;
+  return true;
+};
+const unlock = (name, a) => { if (locks[name] === a) delete locks[name]; };
+async function lockWait(name, a, maxS) {
+  const until = sim.t + maxS;
+  while (!tryLock(name, a)) {
+    if (sim.t > until) return false;
+    await wait(0.5);
+  }
+  return true;
+}
+async function withLocks(a, names, fn) {
+  const got = [];
+  for (const n of names) {
+    if (!tryLock(n, a)) { got.forEach((m) => unlock(m, a)); return false; }
+    got.push(n);
+  }
+  try { await fn(); } finally { got.forEach((m) => unlock(m, a)); }
+  return true;
+}
+
+// ---------- 同居人 ----------
+const ST = {
+  door: { x: -3.5, z: 2.15 }, switch: { x: -3.6, z: 1.3 }, sink: { x: -1.5, z: -2.0 }, stove: { x: -0.2, z: -2.0 },
+  fridge: { x: 1.35, z: -1.5 }, bath: { x: -3.15, z: -1.9 }, tv: { x: -3.2, z: -0.4 }, chair: { x: 2.5, z: 1.4 },
+  bed: { x: 2.0, z: -1.6 }, curtain: { x: 2.2, z: -2.5 },
+  cushion0: { x: -1.15, z: -0.35 }, cushion1: { x: -2.0, z: 0.42 }, cushion2: { x: -2.0, z: -1.02 },
+};
+const agents = [];
+const eventLog = [];
+function log(a, what) {
+  eventLog.push({ t: Math.round(sim.t * 10) / 10, who: a ? a.id : null, what });
+  if (eventLog.length > 400) eventLog.shift();
+}
+async function walk(a, to) {
+  const p = ST[to];
+  const d = Math.hypot(p.x - a.x, p.z - a.z);
+  await wait(d / 1.1 + 0.3);
+  a.x = p.x;
+  a.z = p.z;
+}
+function setRoomLight(on, a) {
+  S.switchOn = on;
+  S.roomLight.set(on ? 1 : 0);
+  if (on) S.roomFlickUntil = sim.t + 0.45;
+  log(a, on ? '部屋の電気をつけた' : '部屋の電気を消した');
+}
+function nudge(o, amount, rot) {
+  o.dx.set(rand(-amount, amount));
+  o.dz.set(rand(-amount, amount));
+  o.r.set(o.r.t + rand(-rot, rot));
+}
+// 冷蔵庫は少し開けて一瞬止まり、それからもう少し開ける（開ける幅は毎回違う）
+async function openFridge() {
+  S.fridge.set(rand(0.3, 0.5));
+  await wait(rand(0.35, 0.9));
+  S.fridge.set(rand(0.72, 1));
+}
+// カーテンは 2 回に分けて引く。閉め切らない・開け切らないこともある
+async function pullCurtain(close) {
+  const end = close ? (chance(0.25) ? rand(0.78, 0.9) : rand(0.92, 1)) : (chance(0.25) ? rand(0.08, 0.18) : rand(0, 0.05));
+  const from = S.curtain.t;
+  S.curtain.set(from + (end - from) * rand(0.5, 0.7));
+  await wait(rand(0.5, 1.1));
+  S.curtain.set(end);
+}
+function setChannel(h) {
+  S.tvHue = h;
+  S.tvFlash = 0.7;
+}
+const freeCushion = () => cushionDefs.findIndex((_, i) => !locks['cushion' + i]);
+
+async function arrive(a) {
+  await lockWait('door', a, 999);
+  log(a, '帰ってきた');
+  // 開ける角度と、入ってから閉めるまでの間は毎回少し違う
+  S.entrance.set(rand(0.78, 1));
+  await wait(rand(1.4, 2.2));
+  a.home = true;
+  updateUI();
+  a.x = ST.door.x;
+  a.z = ST.door.z;
+  S.entrance.set(0);
+  await wait(rand(1.3, 1.9));
+  unlock('door', a);
+  if (!S.switchOn && !S.movieBy) {
+    await walk(a, 'switch');
+    setRoomLight(true, a);
+    await wait(rand(0.25, 0.7));
+  }
+}
+async function leave(a) {
+  log(a, '出かける支度');
+  await walk(a, 'door');
+  await lockWait('door', a, 999);
+  // 玄関で、自分が最後かどうかを見る（同時に出かける人がいても、片づけ忘れが残らないように）
+  if (!agents.some((b) => b !== a && b.home)) {
+    // 最後に出る人は、消し忘れを消してから出る
+    if (S.tvOn.t > 0.5) {
+      await walk(a, 'tv');
+      S.tvOn.set(0);
+      S.tvForgot = false;
+      log(a, 'テレビを消した');
+    }
+    if (S.lamp.t > 0.5) {
+      await walk(a, 'chair');
+      S.lamp.set(0);
+      S.lampForgot = false;
+    }
+    if (S.bathLight.t > 0.5) {
+      await walk(a, 'bath');
+      S.bathLight.set(0);
+      S.bathForgot = false;
+    }
+    if (S.switchOn) {
+      await walk(a, 'switch');
+      setRoomLight(false, a);
+    }
+    await walk(a, 'door');
+  }
+  await wait(rand(0.5, 1.3));
+  S.entrance.set(rand(0.7, 0.95));
+  await wait(rand(1.2, 1.8));
+  a.home = false;
+  log(a, '出かけた');
+  S.entrance.set(0);
+  await wait(rand(1.2, 1.6));
+  unlock('door', a);
+}
+
+// 座布団に座る
+async function sitDown(a, i) {
+  await walk(a, 'cushion' + i);
+  nudge(S.cushions[i], 0.07, 0.3);
+  await wait(rand(0.3, 0.9));
+}
+
+// ---------- 生活のふるまい ----------
+const activities = [
+  {
+    name: 'お茶をいれる',
+    weight: () => (!locks.sink && !locks.stove ? 1 : 0),
+    run: (a) => withLocks(a, ['sink', 'stove'], async () => {
+      await walk(a, 'sink');
+      S.water = true;
+      await wait(rand(2, 3.2));
+      S.water = false;
+      await walk(a, 'stove');
+      S.burnerA.set(1);
+      await wait(rand(9, 14));
+      S.kettleBoil = true;
+      await wait(rand(2.5, 4.5));
+      S.burnerA.set(0);
+      S.kettleBoil = false;
+      await wait(rand(0.5, 1.2));
+    }),
+  },
+  {
+    name: '料理をする',
+    weight: () => (!locks.sink && !locks.stove && !locks.fridge ? 0.7 : 0),
+    run: (a) => withLocks(a, ['fridge', 'sink', 'stove'], async () => {
+      await walk(a, 'fridge');
+      await openFridge();
+      await wait(rand(2, 3.5));
+      S.fridge.set(0);
+      await wait(rand(0.7, 1.2));
+      unlock('fridge', a);
+      await walk(a, 'sink');
+      S.water = true;
+      await wait(rand(2.5, 4));
+      S.water = false;
+      await walk(a, 'stove');
+      S.burnerB.set(1);
+      const end = sim.t + rand(14, 24);
+      while (sim.t < end) {
+        await wait(rand(3, 6));
+        S.burnerB.set(chance(0.5) ? 1.3 : 0.7);
+      }
+      S.burnerB.set(0);
+      await wait(rand(0.4, 1));
+      if (chance(0.6)) {
+        await walk(a, 'sink');
+        S.water = true;
+        await wait(rand(3, 5));
+        S.water = false;
+      }
+    }),
+  },
+  {
+    name: '冷蔵庫をのぞく',
+    weight: () => (!locks.fridge ? 0.9 : 0),
+    run: (a) => withLocks(a, ['fridge'], async () => {
+      await walk(a, 'fridge');
+      await openFridge();
+      await wait(rand(2.5, 6.5));
+      S.fridge.set(0);
+      if (chance(0.35)) {
+        // やっぱりもう一回のぞく（今度は少しだけ開けて、すぐ閉める）
+        await wait(rand(0.9, 1.8));
+        S.fridge.set(rand(0.45, 0.8));
+        await wait(rand(0.9, 2.2));
+        S.fridge.set(0);
+      }
+      await wait(rand(0.5, 1));
+    }),
+  },
+  {
+    name: 'テレビを見る',
+    weight: () => (!locks.tv && freeCushion() >= 0 ? 1.2 : 0),
+    run: async (a) => {
+      const ci = freeCushion();
+      if (ci < 0) return;
+      await withLocks(a, ['tv', 'cushion' + ci], async () => {
+        await sitDown(a, ci);
+        // 部屋を暗くして見る
+        if (S.switchOn && !locks.desk && chance(0.25)) {
+          await walk(a, 'switch');
+          S.movieBy = a;
+          setRoomLight(false, a);
+          await walk(a, 'cushion' + ci);
+        }
+        nudge(S.remote, 0.1, 0.6);
+        await wait(rand(0.25, 0.8));
+        let own = S.tvHue;
+        if (S.tvOn.t < 0.5) {
+          S.tvOn.set(1);
+          own = Math.random();
+          setChannel(own);
+          log(a, 'テレビをつけた');
+        } else {
+          S.tvForgot = false;
+          log(a, 'つけっぱなしのテレビを見はじめた');
+        }
+        const end = sim.t + rand(30, 60);
+        while (sim.t < end) {
+          await wait(rand(3, 9));
+          if (Math.abs(S.tvHue - own) > 0.001) {
+            // だれかに替えられたので戻す
+            await wait(rand(0.8, 1.8));
+            nudge(S.remote, 0.1, 0.8);
+            setChannel(own);
+            log(a, 'チャンネルを戻した');
+          } else if (chance(0.35)) {
+            nudge(S.remote, 0.06, 0.4);
+            own = Math.random();
+            setChannel(own);
+          }
+        }
+        if (chance(0.2)) {
+          S.tvForgot = true;
+          log(a, 'テレビをつけたまま離れた');
+        } else {
+          nudge(S.remote, 0.1, 0.6);
+          S.tvOn.set(0);
+          log(a, 'テレビを消した');
+        }
+        await wait(rand(0.4, 1.1));
+        if (S.movieBy === a) {
+          S.movieBy = null;
+          if (!S.switchOn) {
+            await walk(a, 'switch');
+            setRoomLight(true, a);
+          }
+        }
+      });
+    },
+  },
+  {
+    name: 'いっしょにテレビを見る',
+    weight: () => (S.tvOn.t > 0.5 && locks.tv && freeCushion() >= 0 ? 1.4 : 0),
+    run: async (a) => {
+      const ci = freeCushion();
+      if (ci < 0) return;
+      await withLocks(a, ['cushion' + ci], async () => {
+        await sitDown(a, ci);
+        const end = sim.t + rand(18, 40);
+        while (sim.t < end && S.tvOn.t > 0.5) {
+          await wait(rand(4, 10));
+          if (chance(0.3) && S.tvOn.t > 0.5) {
+            nudge(S.remote, 0.12, 0.8);
+            setChannel(Math.random());
+            log(a, 'チャンネルを替えた');
+          }
+        }
+        nudge(S.cushions[ci], 0.09, 0.3);
+      });
+    },
+  },
+  {
+    name: 'お風呂・トイレ',
+    weight: () => 0.9,
+    run: async (a) => {
+      await walk(a, 'bath');
+      if (!tryLock('bath', a)) {
+        // 入っている。ノブをガチャガチャ
+        S.bathKnobUntil = sim.t + 0.9;
+        log(a, '浴室のドアノブを回した（使用中）');
+        await wait(rand(1.5, 3));
+        if (chance(0.5)) S.bathKnobUntil = sim.t + 0.6;
+        if (!(await lockWait('bath', a, 25))) return;
+      }
+      try {
+        S.bathDoor.set(rand(0.72, 1));
+        await wait(rand(0.6, 1.2));
+        S.bathLight.set(1);
+        S.bathForgot = false;
+        await wait(rand(0.5, 1.1));
+        S.bathDoor.set(0);
+        await wait(rand(14, 32));
+        S.bathDoor.set(rand(0.6, 1));
+        await wait(rand(1, 1.8));
+        // 出るときは、ときどき閉め切らずに少し開いたままにする
+        S.bathDoor.set(chance(0.2) ? rand(0.08, 0.2) : 0);
+        await wait(rand(0.6, 1.1));
+        if (chance(0.15)) {
+          S.bathForgot = true;
+          log(a, '浴室の電気を消し忘れた');
+        } else {
+          S.bathLight.set(0);
+        }
+      } finally {
+        unlock('bath', a);
+      }
+    },
+  },
+  {
+    name: '机で作業する',
+    weight: () => (!locks.desk ? 1 : 0),
+    run: (a) => withLocks(a, ['desk'], async () => {
+      await walk(a, 'chair');
+      // ガタッと引いて、座ってから机へ寄せる（引く距離・向きは毎回違う）
+      S.chairOff.set(rand(-0.46, -0.3));
+      S.chairRot.set(rand(-0.35, 0.35));
+      await wait(rand(0.6, 1.3));
+      S.chairOff.set(rand(-0.22, -0.12));
+      S.chairRot.set(rand(-0.1, 0.1));
+      await wait(rand(0.5, 1.2));
+      S.laptopLid.set(rand(0.82, 1));
+      await wait(rand(0.9, 1.6));
+      S.laptopScreen.set(1);
+      if (!S.switchOn || chance(0.5)) {
+        S.lamp.set(1);
+        S.lampForgot = false;
+      }
+      const end = sim.t + rand(25, 50);
+      while (sim.t < end) {
+        await wait(rand(5, 11));
+        if (!S.switchOn && S.lamp.t < 0.5) S.lamp.set(1);
+        S.chairRot.set(rand(-0.25, 0.25));
+      }
+      S.laptopScreen.set(0);
+      await wait(rand(0.25, 0.7));
+      S.laptopLid.set(0);
+      await wait(rand(0.4, 0.9));
+      if (S.lamp.t > 0.5) {
+        if (chance(0.15)) S.lampForgot = true;
+        else S.lamp.set(0);
+      }
+      if (chance(0.6)) {
+        S.chairOff.set(rand(-0.48, -0.3));
+        S.chairRot.set(rand(-0.45, 0.45));
+      } else {
+        // しまうときも、まっすぐきっちりとは限らない
+        S.chairOff.set(rand(-0.04, 0));
+        S.chairRot.set(rand(-0.06, 0.06));
+      }
+      await wait(rand(0.4, 0.9));
+    }),
+  },
+  {
+    name: '昼寝する',
+    weight: () => (!locks.bed ? 0.6 : 0),
+    run: (a) => withLocks(a, ['bed'], async () => {
+      await walk(a, 'curtain');
+      if (S.curtain.t < 0.5) {
+        await pullCurtain(true);
+        await wait(rand(0.8, 1.6));
+      }
+      await walk(a, 'bed');
+      S.blanket.set(rand(0.85, 1));
+      await wait(rand(25, 45));
+      // 起きたら布団をたたむ。たたまないときは、めくれ具合がその時々で違う
+      S.blanket.set(chance(0.6) ? 0 : rand(0.6, 1));
+      await wait(rand(0.5, 1.3));
+      if (chance(0.7)) {
+        await walk(a, 'curtain');
+        await pullCurtain(false);
+      }
+    }),
+  },
+  {
+    name: 'カーテンを開け閉めする',
+    weight: () => (!locks.bed ? 0.25 : 0),
+    run: (a) => withLocks(a, ['bed'], async () => {
+      await walk(a, 'curtain');
+      await pullCurtain(S.curtain.t <= 0.5);
+      await wait(rand(0.8, 1.6));
+    }),
+  },
+  {
+    name: '片づける',
+    weight: () => leftovers().length * 0.8,
+    run: async (a) => {
+      const items = leftovers();
+      if (!items.length) return;
+      await pick(items)(a);
+    },
+  },
+];
+// だれかがやりっぱなしにしたもの
+function leftovers() {
+  const list = [];
+  if (S.tvForgot && !locks.tv) {
+    list.push((a) => withLocks(a, ['tv'], async () => {
+      await walk(a, 'tv');
+      if (S.tvForgot) {
+        S.tvOn.set(0);
+        S.tvForgot = false;
+        log(a, 'つけっぱなしのテレビを消した');
+      }
+    }));
+  }
+  if (S.bathForgot && !locks.bath) {
+    list.push(async (a) => {
+      await walk(a, 'bath');
+      if (S.bathForgot && !locks.bath) {
+        S.bathLight.set(0);
+        S.bathForgot = false;
+        log(a, '浴室の電気を消した');
+      }
+    });
+  }
+  if (S.lampForgot && !locks.desk) {
+    list.push((a) => withLocks(a, ['desk'], async () => {
+      await walk(a, 'chair');
+      S.lamp.set(0);
+      S.lampForgot = false;
+    }));
+  }
+  if (S.chairOff.t < -0.05 && !locks.desk) {
+    list.push((a) => withLocks(a, ['desk'], async () => {
+      await walk(a, 'chair');
+      S.chairOff.set(rand(-0.03, 0));
+      S.chairRot.set(rand(-0.05, 0.05));
+      log(a, '椅子をしまった');
+    }));
+  }
+  if (S.blanket.t > 0.5 && !locks.bed) {
+    list.push((a) => withLocks(a, ['bed'], async () => {
+      await walk(a, 'bed');
+      S.blanket.set(0);
+      log(a, '布団を直した');
+    }));
+  }
+  return list;
+}
+function chooseActivity() {
+  const ws = activities.map((act) => Math.max(0, act.weight()));
+  const total = ws.reduce((s, w) => s + w, 0);
+  if (total <= 0) return null;
+  let r = Math.random() * total;
+  for (let i = 0; i < activities.length; i++) {
+    r -= ws[i];
+    if (r <= 0) return activities[i];
+  }
+  return null;
+}
+
+let nextId = 1;
+async function life(a) {
+  try {
+    await wait(a.delay);
+    if (!a.leaving) {
+      await arrive(a);
+      while (!a.leaving) {
+        const act = chooseActivity();
+        if (act) {
+          log(a, act.name);
+          await act.run(a);
+        }
+        await wait(rand(1.5, 6));
+      }
+      await leave(a);
+    }
+  } catch (e) {
+    console.error(e);
+  }
+  agents.splice(agents.indexOf(a), 1);
+  updateUI();
+}
+function spawn(delay) {
+  const a = { id: nextId++, x: -5, z: 2.15, home: false, leaving: false, delay };
+  agents.push(a);
+  life(a);
+}
+
+// ---------- 人数の UI ----------
+const params = new URLSearchParams(location.search);
+let wanted = Math.max(0, Math.min(MAX_ROOMMATES, parseInt(params.get('n') ?? '1', 10) || 0));
+if (params.get('n') === '0') wanted = 0;
+const countEl = document.getElementById('count');
+const statusEl = document.getElementById('status');
+const plusBtn = document.getElementById('plus');
+const minusBtn = document.getElementById('minus');
+function applyWanted() {
+  const staying = agents.filter((a) => !a.leaving);
+  let extra = 0;
+  for (let i = staying.length; i < wanted; i++) {
+    // 出かける支度中の人がいれば、その分の靴の場所が空くのを待たずに別の人として来る
+    if (agents.length >= MAX_ROOMMATES) break;
+    spawn(1.2 + extra * rand(3, 6));
+    extra++;
+  }
+  for (let i = staying.length; i > wanted; i--) {
+    const target = staying.filter((a) => !a.leaving).pop();
+    if (target) target.leaving = true;
+  }
+  updateUI();
+}
+function updateUI() {
+  countEl.textContent = String(wanted);
+  plusBtn.disabled = wanted >= MAX_ROOMMATES;
+  minusBtn.disabled = wanted <= 0;
+  const arriving = agents.filter((a) => !a.home && !a.leaving).length;
+  const leaving = agents.filter((a) => a.leaving && a.home).length;
+  statusEl.textContent = arriving ? '帰宅待ち…' : leaving ? '出かける支度中…' : '';
+}
+function bump() {
+  countEl.classList.remove('bump');
+  void countEl.offsetWidth;
+  countEl.classList.add('bump');
+}
+plusBtn.addEventListener('click', () => { if (wanted < MAX_ROOMMATES) { wanted++; bump(); applyWanted(); } });
+minusBtn.addEventListener('click', () => { if (wanted > 0) { wanted--; bump(); applyWanted(); } });
+
+// ---------- カメラ（箱庭をのぞく位置） ----------
+function fitCamera() {
+  const w = window.innerWidth, h = window.innerHeight;
+  renderer.setSize(w, h);
+  camera.aspect = w / h;
+  camera.updateProjectionMatrix();
+}
+window.addEventListener('resize', fitCamera);
+fitCamera();
+function placeCamera(t) {
+  const vfov = THREE.MathUtils.degToRad(camera.fov);
+  const hfov = 2 * Math.atan(Math.tan(vfov / 2) * camera.aspect);
+  const R = 5.1;
+  const dist = R / Math.sin(Math.min(vfov, hfov) / 2);
+  // 奥行きの精度を上げるため、near/far を部屋のまわりだけに絞る（重なった面のちらつき・縞を防ぐ）
+  const near = Math.max(0.1, dist - R - 2), far = dist + R + 2;
+  if (Math.abs(camera.near - near) > 0.01 || Math.abs(camera.far - far) > 0.01) {
+    camera.near = near;
+    camera.far = far;
+    camera.updateProjectionMatrix();
+  }
+  const az = 0.6 + Math.sin(t * 0.06) * 0.05;
+  const el = 0.6 + Math.sin(t * 0.045 + 1) * 0.015;
+  camera.position.set(
+    lookTarget.x + dist * Math.cos(el) * Math.sin(az),
+    lookTarget.y + dist * Math.sin(el),
+    lookTarget.z + dist * Math.cos(el) * Math.cos(az),
+  );
+  camera.lookAt(lookTarget);
+}
+
+// ---------- 毎フレームの反映 ----------
+const tvColor = new THREE.Color();
+const tmpColor = new THREE.Color();
+function applyState(dt) {
+  for (const v of vals) v.step(dt);
+  const t = sim.t;
+
+  // 玄関
+  entranceDoor.rotation.y = -S.entrance.v * 1.35;
+  const hall = Math.min(1, Math.max(0, S.entrance.v) * 1.6);
+  hallSpill.intensity = hall * 9;
+
+  // 部屋の電気（つけた直後は少しちらつく）
+  let rl = S.roomLight.v;
+  if (t < S.roomFlickUntil) rl *= Math.random() < 0.5 ? 1 : 0.15;
+  roomLight.intensity = rl * 16;
+  // スイッチはパチッと倒れて端で小さく跳ねる
+  switchAng.set(S.switchOn ? 1 : -1);
+  switchToggle.rotation.z = switchAng.v * 0.25;
+
+  // 浴室
+  bathDoor.rotation.y = S.bathDoor.v * 1.3;
+  let knob = 0;
+  if (t < S.bathKnobUntil) knob = Math.abs(Math.sin(t * 28)) * 0.6;
+  bathLever.rotation.z = -knob;
+  const bl = S.bathLight.v;
+  bathWallMat.emissiveIntensity = bl * 0.9;
+  bathSpill.intensity = bl * Math.min(1, S.bathDoor.v * 1.5) * 10;
+  leakMat.opacity = bl * (1 - Math.min(1, S.bathDoor.v * 3)) * 0.55;
+
+  // キッチン
+  water.visible = S.water;
+  if (S.water) water.scale.set(1 + Math.random() * 0.3, 1, 1 + Math.random() * 0.3);
+  for (const [b, v] of [[burnerA, S.burnerA.v], [burnerB, S.burnerB.v]]) {
+    b.flame.scale.setScalar(Math.max(0.0001, v));
+    for (const c of b.cones) c.scale.y = 0.75 + Math.random() * 0.5;
+    b.light.intensity = v * (1.2 + Math.random() * 0.25);
+  }
+  kettleLid.position.y = kettleLidY + (S.kettleBoil ? Math.abs(Math.sin(t * 22)) * 0.012 * Math.random() : 0);
+  kettleLid.rotation.z = S.kettleBoil ? (Math.random() - 0.5) * 0.12 : 0;
+
+  // 冷蔵庫
+  fridgeDoor.rotation.y = S.fridge.v * 1.55;
+  // 庫内灯は扉が少し開いた時点で点き、開き具合に応じて外へ漏れる光が増える
+  const fo = Math.min(1, Math.max(0, S.fridge.v) * 2.5);
+  fridgeInnerMat.emissiveIntensity = fo * 0.75;
+  for (const fm of fridgeFoodMats) fm.emissiveIntensity = fo * 0.22;
+  fridgeLight.intensity = fo * 3.5;
+
+  // テレビ（場面が切り替わるように明るさが揺れる）
+  if (t > S.tvCutAt) {
+    S.tvLum = rand(0.35, 0.65);
+    S.tvCutAt = t + rand(1.2, 4);
+  }
+  S.tvFlash = Math.max(0, S.tvFlash - dt * 3);
+  const on = S.tvOn.v;
+  tvColor.setHSL(S.tvHue, 0.55, S.tvLum).lerp(tmpColor.set('#ffffff'), S.tvFlash * 0.6);
+  tvScreenMat.color.copy(tvColor).multiplyScalar(on).add(tmpColor.set('#08080a').multiplyScalar(1 - on));
+  tvLight.color.copy(tvColor);
+  tvLight.intensity = on * (2.2 + S.tvFlash * 2);
+
+  // 机
+  laptopLid.rotation.z = -S.laptopLid.v * 1.85;
+  const sc = S.laptopScreen.v;
+  screenMat.color.setRGB(0.04 + sc * 0.62, 0.05 + sc * 0.7, 0.07 + sc * 0.82);
+  laptopLight.intensity = sc * 0.8;
+  const lv = S.lamp.v;
+  lampLight.intensity = lv * 3.2;
+  bulbMat.color.setRGB(0.29 + lv * 0.71, 0.28 + lv * 0.62, 0.25 + lv * 0.4);
+  chair.position.set(chairBase.x + S.chairOff.v, chairBase.y, chairBase.z + S.chairOff.v * 0.25);
+  // 引きずられている間は、脚が床に引っかかって進む向きに少し傾き、ガタガタする
+  const cv = S.chairOff.vel;
+  const rattle = Math.min(1, Math.abs(cv)) * Math.sin(t * 57) * 0.012;
+  chair.rotation.set(0, S.chairRot.v, THREE.MathUtils.clamp(-cv * 0.05, -0.07, 0.07) + rattle);
+
+  // ベッドとカーテン
+  const m = S.blanket.v;
+  blanket.position.set(blanketBase.x + m * 0.05, blanketBase.y + m * 0.02, blanketBase.z + m * 0.12);
+  blanket.rotation.y = m * 0.1;
+  blanket.scale.z = 1 - m * 0.2;
+  blanketFold.visible = m > 0.05;
+  blanketFold.scale.setScalar(Math.max(0.0001, Math.min(1.05, m)));
+  // 左を引くと、右は少し遅れて引っ張られ、揺れながら止まる
+  curtainLag.set(S.curtain.v);
+  curtainL.scale.x = 0.28 + S.curtain.v * 0.72;
+  curtainR.scale.x = 0.28 + curtainLag.v * 0.72;
+
+  // 座布団とリモコン
+  S.cushions.forEach((c, i) => {
+    const d = cushionDefs[i];
+    cushionMeshes[i].position.set(d.x + c.dx.v, d.y, d.z + c.dz.v);
+    cushionMeshes[i].rotation.y = c.r.v;
+  });
+  remote.position.set(remoteBase.x + S.remote.dx.v * 0.6, remoteBase.y, remoteBase.z + S.remote.dz.v);
+  remote.rotation.y = S.remote.r.v;
+}
+
+// ---------- 音（同居人がやったことの音だけ。最初のクリックで始まる） ----------
+// 状態 S の変化を毎フレーム見て、対応する物の位置から鳴らす（同居人のロジックには手を入れない）
+// 素材は assets/sounds/ の CC0・パブリックドメインの録音（出典は assets/CREDITS.md）
+const LOOP_START = 0.2; // ループ素材は 0.2 秒から「周期」ぶんを回す（mp3 の頭の無音を避けるため）
+const LOOP_PERIOD = { water: 10, gas: 5.5, kettle: 6.5, tv_ch0: 24, tv_ch1: 24, tv_ch2: 24, tv_ch3: 24 };
+const SOUND_NAMES = [
+  'door_unlock_open', 'door_open', 'door_close', 'door_lock', 'switch', 'lamp_switch',
+  'bath_door_open', 'bath_door_close', 'knob_rattle', 'knob_rattle2',
+  'water', 'stove_ignite', 'gas', 'kettle', 'fridge_open', 'fridge_close',
+  'tv_on', 'tv_off', 'tv_ch0', 'tv_ch1', 'tv_ch2', 'tv_ch3', 'remote_1', 'remote_2',
+  'cushion_1', 'cushion_2', 'chair_pull', 'chair_push', 'laptop_open', 'laptop_close', 'typing',
+  'curtain_1', 'curtain_2', 'blanket_1', 'blanket_2',
+];
+const soundLog = [];
+const snd = { started: false, ready: false, listener: null, buffers: {}, spots: {}, loops: {}, prev: null, closing: {}, typeAt: 0 };
+const soundHint = document.getElementById('soundHint');
+
+// 鳴らす場所（物の位置）
+function soundSpots() {
+  const at = (o) => o.getWorldPosition(new THREE.Vector3());
+  const curtain = at(curtainL).add(at(curtainR)).multiplyScalar(0.5);
+  const spots = {
+    entrance: at(entranceDoor), switch: at(switchToggle), bath: at(bathLever),
+    sink: water.position.clone(), burnerA: burnerA.flame.position.clone(), burnerB: burnerB.flame.position.clone(),
+    kettle: at(kettleLid), fridge: at(fridgeDoor), tv: tvLight.position.clone(), remote: at(remote),
+    chair: at(chair), laptop: at(laptopLid), lamp: lampLight.position.clone(), curtain, bed: at(blanket),
+  };
+  cushionMeshes.forEach((m, i) => { spots['cushion' + i] = at(m); });
+  for (const [k, p] of Object.entries(spots)) {
+    const o = new THREE.Object3D();
+    o.position.copy(p);
+    scene.add(o);
+    snd.spots[k] = o;
+  }
+}
+
+function logSound(kind, name, spot) {
+  soundLog.push({ t: Math.round(sim.t * 100) / 100, kind, name, spot });
+  if (soundLog.length > 600) soundLog.shift();
+}
+
+function makeAudio(name, spot, vol) {
+  const a = new THREE.PositionalAudio(snd.listener);
+  a.setBuffer(snd.buffers[name]);
+  a.setRefDistance(20);
+  a.setRolloffFactor(1.5);
+  a.setVolume(vol);
+  snd.spots[spot].add(a);
+  return a;
+}
+
+// 一回だけ鳴らす。name が配列ならどれか一つ
+function play(name, spot, vol, o = {}) {
+  if (Array.isArray(name)) name = pick(name);
+  const a = makeAudio(name, spot, vol);
+  a.playbackRate = o.rate ?? rand(0.96, 1.04);
+  if (o.offset) a.offset = o.offset;
+  if (o.duration) {
+    // 途中を切り出すときは、端がプツッといわないように音量をなだらかに上げ下げする
+    a.duration = o.duration;
+    const g = a.gain.gain, t0 = snd.listener.context.currentTime + (o.delay || 0);
+    g.cancelScheduledValues(0);
+    g.setValueAtTime(0, t0);
+    g.linearRampToValueAtTime(vol, t0 + 0.03);
+    g.setValueAtTime(vol, t0 + o.duration / a.playbackRate - 0.08);
+    g.linearRampToValueAtTime(0, t0 + o.duration / a.playbackRate);
+  }
+  a.onEnded = function () {
+    THREE.Audio.prototype.onEnded.call(this);
+    this.parent?.remove(this);
+    this.disconnect();
+  };
+  a.play(o.delay || 0);
+  logSound('play', name, spot);
+}
+
+// 鳴り続ける音（水・ガスの火・やかん・テレビ）
+function startLoop(key, name, spot, vol, o = {}) {
+  if (snd.loops[key]) return;
+  const a = makeAudio(name, spot, 0);
+  a.setLoop(true);
+  a.setLoopStart(LOOP_START);
+  a.setLoopEnd(LOOP_START + LOOP_PERIOD[name]);
+  a.offset = LOOP_START + Math.random() * LOOP_PERIOD[name];
+  if (o.filter) a.setFilter(o.filter);
+  const ctx = snd.listener.context;
+  const g = a.gain.gain;
+  g.cancelScheduledValues(0);
+  g.setValueAtTime(0, ctx.currentTime);
+  g.setTargetAtTime(vol, ctx.currentTime + (o.delay || 0), (o.fadeIn ?? 0.15) / 3);
+  a.play(o.delay || 0);
+  snd.loops[key] = { a, name, vol };
+  logSound('loop-start', name, spot);
+}
+function setLoopVolume(key, vol) {
+  const l = snd.loops[key];
+  if (!l || Math.abs(l.vol - vol) < 0.005) return;
+  l.vol = vol;
+  l.a.gain.gain.setTargetAtTime(vol, snd.listener.context.currentTime, 0.4);
+}
+function stopLoop(key, fade = 0.3) {
+  const l = snd.loops[key];
+  if (!l) return;
+  delete snd.loops[key];
+  const ctx = snd.listener.context;
+  l.a.gain.gain.cancelScheduledValues(0);
+  l.a.gain.gain.setTargetAtTime(0, ctx.currentTime, fade / 3);
+  const spot = l.a.parent;
+  setTimeout(() => {
+    if (l.a.isPlaying) l.a.stop();
+    spot?.remove(l.a);
+    l.a.disconnect();
+  }, fade * 1500 + 100);
+  logSound('loop-stop', l.name, null);
+}
+
+// テレビの音: チャンネル（色相）ごとに番組と、こもり具合を変える。壁越しのように低い音だけを通す
+function tvChannel(hue) {
+  const n = Math.floor(hue * 4) % 4;
+  const f = (hue * 9.7) % 1; // 同じ番組でも色相でこもり具合が変わる
+  return { name: 'tv_ch' + n, cutoff: 380 + f * 320 };
+}
+function startTv(delay) {
+  const ch = tvChannel(S.tvHue);
+  const ctx = snd.listener.context;
+  const lp = ctx.createBiquadFilter();
+  lp.type = 'lowpass';
+  lp.frequency.value = ch.cutoff;
+  lp.Q.value = 0.4;
+  startLoop('tv', ch.name, 'tv', 0.4, { filter: lp, delay, fadeIn: 0.25 });
+  snd.tvHue = S.tvHue;
+}
+
+function soundSnapshot() {
+  return {
+    entrance: S.entrance.t, switchOn: S.switchOn, bathDoor: S.bathDoor.t, bathLight: S.bathLight.t,
+    knob: S.bathKnobUntil, burnerA: S.burnerA.t, burnerB: S.burnerB.t, fridge: S.fridge.t,
+    tvOn: S.tvOn.t, lamp: S.lamp.t, lid: S.laptopLid.t, chairOff: S.chairOff.t,
+    curtain: S.curtain.t, blanket: S.blanket.t, remote: S.remote.dx.t, cushions: S.cushions.map((c) => c.dx.t),
+  };
+}
+const lastLog = () => eventLog[eventLog.length - 1]?.what;
+// 閉まりきる前にまた開けられたら、閉まる音をその場で鳴らしてから開ける音へ
+const CLOSE_SOUND = { entrance: ['door_close', 'entrance', 0.5], bathDoor: ['bath_door_close', 'bath', 0.4], fridge: ['fridge_close', 'fridge', 0.45], lid: ['laptop_close', 'laptop', 0.38] };
+function flushClosing(key) {
+  if (!snd.closing[key]) return;
+  const [name, spot, vol] = CLOSE_SOUND[key];
+  play(name, spot, vol);
+  if (snd.closing[key] === 'lock') play('door_lock', 'entrance', 0.34, { delay: 0.7, rate: 1 });
+  delete snd.closing[key];
+}
+
+function updateSound() {
+  if (!snd.ready) return;
+  const p = snd.prev;
+  const c = soundSnapshot();
+  snd.prev = c;
+
+  // 玄関: 帰ってきたときは鍵を開けてから開ける。出かけたあとは閉めて鍵をかける
+  if (p.entrance < 0.5 && c.entrance > 0.5) {
+    flushClosing('entrance');
+    if (lastLog() === '帰ってきた') play('door_unlock_open', 'entrance', 0.5, { offset: 0.6, rate: 1 });
+    else play('door_open', 'entrance', 0.45, { rate: 1 });
+  }
+  if (p.entrance > 0.5 && c.entrance < 0.5) snd.closing.entrance = lastLog() === '出かけた' ? 'lock' : 'close';
+
+  // 部屋の電気・浴室の電気・スタンドのスイッチ
+  if (p.switchOn !== c.switchOn) play('switch', 'switch', 0.32);
+  if ((p.bathLight < 0.5) !== (c.bathLight < 0.5)) play('switch', 'bath', 0.26);
+  if ((p.lamp < 0.5) !== (c.lamp < 0.5)) play('lamp_switch', 'lamp', 0.28);
+
+  // 浴室のドアとノブ
+  if (p.bathDoor < 0.5 && c.bathDoor > 0.5) { flushClosing('bathDoor'); play('bath_door_open', 'bath', 0.4); }
+  // 少し開けたままにしたとき（閉め切らない）は閉まる音を鳴らさない
+  if (p.bathDoor > 0.5 && c.bathDoor < 0.5 && c.bathDoor < 0.03) snd.closing.bathDoor = true;
+  if (c.knob > p.knob) {
+    const len = c.knob - sim.t;
+    if (len > 0.7) play('knob_rattle', 'bath', 0.42);
+    else play('knob_rattle2', 'bath', 0.36, { offset: rand(0, 1.2), duration: Math.max(0.3, len) });
+  }
+
+  // コンロ: 点けるときにカチカチ
+  if (p.burnerA < 0.05 && c.burnerA > 0.05) play('stove_ignite', 'burnerA', 0.28);
+  if (p.burnerB < 0.05 && c.burnerB > 0.05) play('stove_ignite', 'burnerB', 0.28);
+
+  // 冷蔵庫
+  if (p.fridge < 0.05 && c.fridge > 0.05) { flushClosing('fridge'); play('fridge_open', 'fridge', 0.42); }
+  if (p.fridge > 0.05 && c.fridge < 0.05) snd.closing.fridge = true;
+
+  // テレビの電源とチャンネル、リモコン
+  if (p.tvOn < 0.5 && c.tvOn > 0.5) play('tv_on', 'tv', 0.28);
+  if (p.tvOn > 0.5 && c.tvOn < 0.5) play('tv_off', 'tv', 0.25);
+  if (p.remote !== c.remote) play(['remote_1', 'remote_2'], 'remote', 0.32, { delay: 0.1 });
+
+  // 座布団に座る・立つ
+  c.cushions.forEach((v, i) => { if (v !== p.cushions[i]) play(['cushion_1', 'cushion_2'], 'cushion' + i, 0.45); });
+
+  // 椅子・ノートPC
+  if (Math.abs(c.chairOff - p.chairOff) > 0.02) {
+    const v = 0.22 + Math.min(1, Math.abs(c.chairOff - p.chairOff) / 0.4) * 0.16;
+    play(c.chairOff < p.chairOff ? 'chair_pull' : 'chair_push', 'chair', v);
+  }
+  if (p.lid < 0.5 && c.lid > 0.5) { flushClosing('lid'); play('laptop_open', 'laptop', 0.4); }
+  if (p.lid > 0.5 && c.lid < 0.5) snd.closing.lid = true;
+
+  // カーテン・布団
+  if (c.curtain !== p.curtain) play(['curtain_1', 'curtain_2'], 'curtain', 0.38);
+  if (c.blanket !== p.blanket) play(['blanket_1', 'blanket_2'], 'bed', 0.4);
+
+  // 閉まる音は、扉が枠に当たって閉まりきったときに 1 回だけ鳴らす（そのあとの小さな跳ね返りでは鳴らさない。
+  // 鳴らすと snd.closing から消えるので、跳ねて少し開いてまた当たっても 2 回目は鳴らない）
+  if (S.entrance.v < 0.02) flushClosing('entrance');
+  if (S.bathDoor.v < 0.02) flushClosing('bathDoor');
+  if (S.fridge.v < 0.02) flushClosing('fridge');
+  if (S.laptopLid.v < 0.03) flushClosing('lid');
+
+  // 作業中は、ときどきキーボードを打つ
+  if (S.laptopScreen.t > 0.5 && S.laptopScreen.v > 0.8) {
+    if (sim.t > snd.typeAt) {
+      if (snd.typeAt > 0) {
+        const d = rand(1.2, 3.5);
+        play('typing', 'laptop', 0.32, { offset: rand(0, 12 - d), duration: d, rate: 1 });
+      }
+      snd.typeAt = sim.t + rand(2.5, 8);
+    }
+  } else {
+    snd.typeAt = 0;
+  }
+
+  // 鳴り続ける音は、状態に合わせて鳴らす・止める
+  const loop = (key, on, start, fade) => { if (on && !snd.loops[key]) start(); else if (!on && snd.loops[key]) stopLoop(key, fade); };
+  loop('water', S.water, () => startLoop('water', 'water', 'sink', 0.2, { fadeIn: 0.2 }), 0.3);
+  for (const [key, val, spot] of [['gasA', S.burnerA, 'burnerA'], ['gasB', S.burnerB, 'burnerB']]) {
+    loop(key, val.t > 0.05, () => startLoop(key, 'gas', spot, 0.1 * val.t, { delay: 0.9, fadeIn: 0.6 }), 0.25);
+    setLoopVolume(key, 0.1 * Math.min(1.3, val.t));
+  }
+  loop('kettle', S.kettleBoil, () => startLoop('kettle', 'kettle', 'kettle', 0.22, { fadeIn: 0.8 }), 0.5);
+  loop('tv', S.tvOn.t > 0.5, () => startTv(0.35), 0.15);
+  if (snd.loops.tv && S.tvHue !== snd.tvHue) {
+    // チャンネルが変わった: いまの番組を切って、少し間をおいて次の番組
+    stopLoop('tv', 0.06);
+    startTv(0.12);
+  }
+}
+
+async function startSound() {
+  if (snd.started) return;
+  snd.started = true;
+  snd.listener = new THREE.AudioListener();
+  camera.add(snd.listener);
+  const ctx = snd.listener.context;
+  ctx.resume();
+  // 同時にたくさん鳴っても割れないように、全体に軽いコンプレッサーをかける
+  const comp = ctx.createDynamicsCompressor();
+  comp.threshold.value = -20;
+  comp.knee.value = 12;
+  comp.ratio.value = 4;
+  comp.attack.value = 0.004;
+  comp.release.value = 0.25;
+  snd.listener.setFilter(comp);
+  snd.listener.setMasterVolume(0.9);
+  soundSpots();
+  await Promise.all(SOUND_NAMES.map(async (n) => {
+    const res = await fetch('assets/sounds/' + n + '.mp3');
+    if (!res.ok) throw new Error('音が読めません: ' + n + ' (' + res.status + ')');
+    snd.buffers[n] = await ctx.decodeAudioData(await res.arrayBuffer());
+  }));
+  snd.prev = soundSnapshot();
+  snd.ready = true;
+  soundHint.classList.add('off');
+  logSound('ready', null, null);
+}
+const onFirstGesture = () => {
+  for (const ev of ['pointerdown', 'keydown', 'touchend']) window.removeEventListener(ev, onFirstGesture, true);
+  startSound().catch((e) => console.error(e));
+};
+for (const ev of ['pointerdown', 'keydown', 'touchend']) window.addEventListener(ev, onFirstGesture, true);
+// iPhone などでは最初の操作で始まらないことがあるので、その後の操作でも再開を試す
+for (const ev of ['click', 'touchend']) window.addEventListener(ev, () => { const ctx = snd.listener?.context; if (ctx && ctx.state !== 'running') ctx.resume(); }, true);
+
+let last = performance.now();
+function frame(now) {
+  const dt = Math.min(0.1, (now - last) / 1000);
+  last = now;
+  sim.t += dt;
+  for (let i = sim.timers.length - 1; i >= 0; i--) {
+    if (sim.timers[i].at <= sim.t) {
+      const { resolve } = sim.timers[i];
+      sim.timers.splice(i, 1);
+      resolve();
+    }
+  }
+  applyState(dt);
+  updateSound();
+  placeCamera(sim.t);
+  renderer.render(scene, camera);
+  requestAnimationFrame(frame);
+}
+requestAnimationFrame(frame);
+applyWanted();
+
+// 動作確認用（画面には出さない）
+window.__roommates = { agents, S, locks, sim, eventLog, soundLog, snd };
+</script>
+</body>
+</html>
