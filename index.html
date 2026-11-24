@@ -230,9 +230,40 @@ bathSpill.position.set(-3.15, 1.9, -3.05);
 bathSpill.target.position.set(-3.0, 0, -1.2);
 scene.add(bathSpill, bathSpill.target);
 // ドアの下から漏れる光
-const leakMat = new THREE.MeshBasicMaterial({ color: '#ffd9a0', transparent: true, opacity: 0, blending: THREE.AdditiveBlending, depthWrite: false });
-const leak = new THREE.Mesh(new THREE.PlaneGeometry(0.86, 0.22), leakMat);
-leak.position.set(-3.15, 0.004, -2.9);
+// 一様な板を足すと、床に縁のくっきりした白っぽい四角が乗って見えたので、ドア側から手前へ・左右の端へ
+// なだらかに薄くなる明るさの模様（map）にする。加算合成なので、模様の黒いところは何も足さない
+function makeLeakTexture() {
+  const w = 64, h = 64;
+  const c = document.createElement('canvas');
+  c.width = w;
+  c.height = h;
+  const g = c.getContext('2d');
+  const img = g.createImageData(w, h);
+  const smooth = (a, b, x) => { const t = Math.min(1, Math.max(0, (x - a) / (b - a))); return t * t * (3 - 2 * t); };
+  for (let y = 0; y < h; y++) {
+    // 画像の上（y=0）がドア側。手前に向かって弱まる
+    const d = y / (h - 1);
+    const fall = Math.pow(1 - d, 2.2);
+    for (let x = 0; x < w; x++) {
+      const u = x / (w - 1);
+      // 左右の端は、ドアから離れるほど広くぼかす（光がすき間から扇形に広がる感じ）
+      const edge = 0.12 + d * 0.25;
+      const side = smooth(0, edge, u) * smooth(0, edge, 1 - u);
+      const v = Math.round(255 * fall * side);
+      const i = (y * w + x) * 4;
+      img.data[i] = img.data[i + 1] = img.data[i + 2] = v;
+      img.data[i + 3] = 255;
+    }
+  }
+  g.putImageData(img, 0, 0);
+  const tex = new THREE.CanvasTexture(c);
+  tex.colorSpace = THREE.NoColorSpace;
+  return tex;
+}
+const leakMat = new THREE.MeshBasicMaterial({ color: '#ffd9a0', map: makeLeakTexture(), transparent: true, opacity: 0, blending: THREE.AdditiveBlending, depthWrite: false });
+// 敷居（z = -2.99 まで）の手前から部屋側へ 0.4m。奥の端は敷居の下に隠れる
+const leak = new THREE.Mesh(new THREE.PlaneGeometry(0.86, 0.42), leakMat);
+leak.position.set(-3.15, 0.004, -2.8);
 leak.rotation.x = -Math.PI / 2;
 scene.add(leak);
 const bathDoor = node('BathDoor');
@@ -275,7 +306,9 @@ const fridgeInnerMat = materials.FridgeInner;
 fridgeInnerMat.emissive.set('#fffaf0');
 fridgeInnerMat.emissiveIntensity = 0;
 const fridgeLight = new THREE.PointLight('#fff6e6', 0, 3.5, 1.6);
-fridgeLight.position.set(1.35, 1.0, -2.0);
+// 光源は庫内（扉の蝶番より奥）に置く。扉の前（z=-2.0）に置いていたら、少し開けた扉の外側の面が
+// 庫内灯で白く光って見えた（点光源は扉にさえぎられないため）。庫内に置けば、扉の外側の面は光源の裏を向く
+fridgeLight.position.set(1.35, 1.05, -2.45);
 scene.add(fridgeLight);
 const fridgeDoor = node('FridgeDoor');
 // 庫内（内壁・棚・食べ物）は部屋の影を受けない。狭い箱の中に細かい縞の影が出て、灰色に沈むため
@@ -291,18 +324,9 @@ for (const n of ['Fridge', 'FridgeDoor']) {
 }
 // 食べ物も庫内灯で少し照らされて見えるように、庫内用に複製したマテリアルへ emissive を足す
 const fridgeFoodMats = [];
-// 内張り（FridgeInner）は本体の内側の面とぴったり重なっていて、ちらちらした網目（Z ファイティング）になるので手前に寄せる
-fridgeInnerMat.polygonOffset = true;
-fridgeInnerMat.polygonOffsetFactor = -1;
-fridgeInnerMat.polygonOffsetUnits = -2;
-// 扉ポケットの物とパッキンは扉の表面と同じ面まで出ていて、表に四角い線が透けるので奥へ下げる（光らせもしない）
-for (const o of fridgeInside) {
-  if (o.material === fridgeInnerMat || !o.name.startsWith('FridgeDoor')) continue;
-  o.material = o.material.clone();
-  o.material.polygonOffset = true;
-  o.material.polygonOffsetFactor = 1;
-  o.material.polygonOffsetUnits = 2;
-}
+// 内張り・パッキンが本体や扉の面と重なる問題は、room.glb の形のほうで離して直している（blender/build_room.py）。
+// polygonOffset で前後にずらすと、実機の GPU では側板や扉の表に点線・四角い線が透けたので使わない
+// 扉ポケットの物は光らせない
 for (const o of fridgeInside) {
   if (o.material === fridgeInnerMat || o.name.startsWith('FridgeDoor')) continue;
   const m = o.material.clone();

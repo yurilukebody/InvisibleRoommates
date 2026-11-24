@@ -681,15 +681,17 @@ boxp('Fridge', 'FridgeBody', 0.95, 1.75, 1.66, 1.7, -3.0, -2.34, bevel=0.008)
 boxp('Fridge', 'BlackPlastic', 0.97, 1.73, 0.0, 0.08, -2.98, -2.36, bevel=0.004)
 # 庫内（光る内張り）
 inner = bmesh.new()
-bm_box(0.99, 1.71, 0.08, 1.66, -2.99, -2.34, inner)
+# 本体の側板・天板・下の黒い台の面と同じ位置に重ねると、実機の GPU でちらつく網目（Z ファイティング）になるので、
+# 内張りは内側へ 3mm 離す（three 側の polygonOffset で押し出すと、側板の外側に点線が透けた）
+bm_box(0.993, 1.707, 0.083, 1.657, -2.99, -2.34, inner)
 bmesh.ops.delete(inner, geom=[f for f in inner.faces if f.calc_center_median().z > -2.35], context='FACES')
 bmesh.ops.reverse_faces(inner, faces=inner.faces)
 part('Fridge', inner, 'FridgeInner', bevel=0.02, seg=2)
 for y in (0.55, 1.08):
-    boxp('Fridge', 'FridgeInner', 0.99, 1.71, y, y + 0.02, -2.96, -2.45, bevel=0.004)
+    boxp('Fridge', 'FridgeInner', 0.995, 1.705, y, y + 0.02, -2.96, -2.45, bevel=0.004)
 # 野菜室のケース
-boxp('Fridge', 'FridgeInner', 1.0, 1.7, 0.08, 0.1, -2.96, -2.45, bevel=0.003)
-boxp('Fridge', 'FridgeInner', 1.0, 1.7, 0.08, 0.3, -2.47, -2.45, bevel=0.004)
+boxp('Fridge', 'FridgeInner', 1.0, 1.7, 0.085, 0.1, -2.96, -2.45, bevel=0.003)
+boxp('Fridge', 'FridgeInner', 1.0, 1.7, 0.085, 0.3, -2.47, -2.45, bevel=0.004)
 # 中身
 boxp('Fridge', 'FoodWhite', 1.05, 1.15, 0.57, 0.76, -2.8, -2.7, bevel=0.004)  # 牛乳パック
 roof = bmesh.new()
@@ -713,7 +715,8 @@ finalize('Fridge')
 # 冷蔵庫の扉（原点＝蝶番 (1.75, 0, -2.34)）
 FX, FZ = 1.75, -2.34
 boxp('FridgeDoor', 'FridgeBody', FX - 0.8, FX, 0.08, 1.7, FZ, FZ + 0.05, bevel=0.015, seg=3)
-boxp('FridgeDoor', 'Gasket', FX - 0.79, FX - 0.01, 0.09, 1.69, FZ - 0.012, FZ, bevel=0.004)
+# パッキンは扉の角の丸み（bevel 0.015）より内側に収める。はみ出すと扉の表に四角い線が透ける
+boxp('FridgeDoor', 'Gasket', FX - 0.78, FX - 0.02, 0.1, 1.68, FZ - 0.012, FZ, bevel=0.004)
 boxp('FridgeDoor', 'Gasket', FX - 0.8, FX, 1.077, 1.083, FZ + 0.049, FZ + 0.052, bevel=0.0)
 part('FridgeDoor', bm_tube([(FX - 0.745, 0.75, FZ + 0.05), (FX - 0.745, 0.76, FZ + 0.075), (FX - 0.745, 1.34, FZ + 0.075),
                             (FX - 0.745, 1.35, FZ + 0.05)], 0.011, seg=12), 'Plastic', smooth=True)
