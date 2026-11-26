@@ -2,6 +2,8 @@
 
 だれもいない部屋。でも、だれかが住んでいる——見えない同居人の暮らしを、家具の動きと生活音だけで描く箱庭（Three.js）。
 
+![「見る」で同居人の姿を出した部屋](docs/screenshot.png)
+
 ## 遊び方
 
 - clone して `dist/InvisibleRoommates.html` をダブルクリックで開く（Chrome / Edge）。サーバーもネット接続も要らない
