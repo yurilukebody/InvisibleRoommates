@@ -1351,20 +1351,25 @@ const figMat = new THREE.ShaderMaterial({
       // ときどき横の帯がずれる
       float band = floor(q.y * 24.0);
       float shift = step(0.94, hash(vec2(band, tq))) * (hash(vec2(tq, band + 7.0)) - 0.5) * 0.06;
+      // 白い横の波線（横位置と時間で細かく波打ち、上へ流れる）。線は 1px・ぼかしなしで描き、斜めの部分を
+      // ピクセルの段（ジャギ）のまま見せる
       float x = q.x + shift;
-      // 白い横の波線（横位置と時間で波打ち、上へ流れる）
-      float y = q.y * 150.0 + sin(x * 23.0 + uTime * 1.7 + q.y * 9.0) * 0.9 + sin(x * 57.0 - uTime * 2.3) * 0.35 - uTime * 1.5;
-      float d = abs(fract(y) - 0.5);
-      float aa = fwidth(y) * 0.8;
-      float line = 1.0 - smoothstep(0.07 - aa, 0.07 + aa, d);
+      float y = q.y * 150.0 + sin(x * 70.0 + uTime * 1.7 + q.y * 9.0) * 1.3 + sin(x * 160.0 - uTime * 2.3) * 0.45 - uTime * 1.5;
+      float line = step(fract(y) * uRes.y / 150.0, 1.0);
       // 白い四角のグリッチ（ときどき、まとめて出る）
       vec2 cell = floor(q * 36.0);
       float burst = step(0.85, hash(vec2(tq, 1.3)));
       float blk = step(0.992 - burst * 0.03, hash(cell + vec2(tq * 3.1, tq * 1.7)));
-      gl_FragColor = vec4(mix(vec3(0.02), vec3(0.93), max(line * 0.9, blk)), 1.0);
+      // 少し透けさせる（黒い地は 6 割、白い線とグリッチは 9 割）
+      float v = max(line * 0.9, blk);
+      gl_FragColor = vec4(mix(vec3(0.02), vec3(0.93), v), mix(0.6, 0.9, v));
     }`,
+  transparent: true,
+  depthWrite: false,
 });
 figMat.toneMapped = false;
+// 透けさせると、重なったカプセル（関節）が二重に暗くなるので、先に深度だけ書いて一番手前の面だけを描く
+const figDepthMat = new THREE.MeshBasicMaterial({ colorWrite: false });
 const figRoot = new THREE.Group();
 figRoot.visible = false;
 scene.add(figRoot);
@@ -1404,6 +1409,8 @@ function makeFigure(a) {
   const mesh = (parent, geo, x, y, z) => {
     const m = new THREE.Mesh(geo, figMat);
     m.position.set(x * s, y * s, z * s);
+    // 深度だけ書く分身（不透明として先に描かれる）。位置・回転・拡大は親の m に任せる
+    m.add(new THREE.Mesh(geo, figDepthMat));
     parent.add(m);
     return m;
   };
